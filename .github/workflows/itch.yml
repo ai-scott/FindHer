@@ -1,0 +1,45 @@
+name: itch
+
+# Manual only (Actions -> itch -> Run workflow): push index.html to
+# itch.io with butler. Pick the branch to publish in the Run menu.
+# Needs the BUTLER_API_KEY repo secret (same key Adventure Land uses)
+# and the ITCH_TARGET repo variable, e.g. "penlockgames/find-her"
+# (itch username / game slug from the game page URL).
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "itch.io channel (the upload's channel name)"
+        type: string
+        default: "html5"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage build
+        run: |
+          mkdir -p build/web
+          cp index.html build/web/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: findher-web
+          path: build/web
+
+      - name: Publish to itch.io
+        env:
+          BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+          ITCH_TARGET: ${{ vars.ITCH_TARGET }}
+        run: |
+          if [ -z "$BUTLER_API_KEY" ] || [ -z "$ITCH_TARGET" ]; then
+            echo "::error::Set the BUTLER_API_KEY secret and ITCH_TARGET variable in repo settings"
+            exit 1
+          fi
+          curl -sSL -o butler.zip https://broth.itch.zone/butler/linux-amd64/LATEST/archive/default
+          unzip -q butler.zip -d butler
+          chmod +x butler/butler
+          ./butler/butler push build/web "$ITCH_TARGET:${{ inputs.channel }}" --userversion "${GITHUB_SHA::7}"

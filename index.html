@@ -56,6 +56,17 @@ if(!r.width||!r.height)return{x:(cx-_cOffX)/_cScale,y:(cy-_cOffY)/_cScale};
 return{x:(cx-r.left)*W/r.width,y:(cy-r.top)*H/r.height};
 }
 resize();window.addEventListener('resize',()=>{resize();window.scrollTo(0,0);});
+// itch.io creates the game iframe before it has its final size, and iOS
+// does not always send a resize when the frame (or itch's fullscreen view)
+// settles. Re-measure on the other signals too, plus a cheap size poll,
+// so the canvas and its buttons always match the frame we are really in.
+{let _lw=window.innerWidth,_lh=window.innerHeight;
+const _refit=()=>{if(window.innerWidth===_lw&&window.innerHeight===_lh)return;_lw=window.innerWidth;_lh=window.innerHeight;resize();};
+if(window.visualViewport)window.visualViewport.addEventListener('resize',_refit);
+window.addEventListener('orientationchange',()=>setTimeout(_refit,250));
+window.addEventListener('pageshow',_refit);
+window.addEventListener('focus',_refit);
+setInterval(_refit,500);}
 
 const TS=40,MW=44,MH=44;
 // ── Hex grid (pointy-top, odd-row right-offset) ──
@@ -304,12 +315,24 @@ break;
 }
 }
 if(z===2){
-// Clear trees around boss so it can move freely
-for(let dr=-4;dr<=4;dr++)for(let dc=-4;dc<=4;dc++){
-const br=m.ey+5+dr,bc=m.ex-2+dc;
-if(br>=1&&br<MH-1&&bc>=1&&bc<MW-1&&m.tiles[br][bc]!==WA)m.tiles[br][bc]=bg;
+// Boss spawn: the nearest spot to the usual lair with no water within 3
+// tiles, so it never lands on (or gets boxed in by) a pond or stream.
+const dryAround=(c0,r0,rad)=>{for(let dr=-rad;dr<=rad;dr++)for(let dc=-rad;dc<=rad;dc++){
+const r=r0+dr,c=c0+dc;if(r<1||r>=MH-1||c<1||c>=MW-1||m.tiles[r][c]===WA)return false;}return true;};
+let bc0=m.ex-2,br0=m.ey+5,best=-1;
+for(let r=4;r<MH-4;r++)for(let c=4;c<MW-4;c++){
+if(!dryAround(c,r,3))continue;
+const d=Math.hypot(c-(m.ex-2),r-(m.ey+5));
+if(best<0||d<best){best=d;bc0=c;br0=r;}
 }
-m.enemies.push(mkE('boss',hxc(m.ex-2,m.ey+5),hyc(m.ey+5)));
+// Clear trees and rocks around it so it can move freely; if no dry spot
+// existed at all, drain the water near it as well.
+for(let dr=-4;dr<=4;dr++)for(let dc=-4;dc<=4;dc++){
+const br=br0+dr,bc=bc0+dc;
+if(br<1||br>=MH-1||bc<1||bc>=MW-1||m.tiles[br][bc]===EX)continue;
+if(m.tiles[br][bc]!==WA||(best<0&&Math.abs(dr)<=2&&Math.abs(dc)<=2))m.tiles[br][bc]=bg;
+}
+m.enemies.push(mkE('boss',hxc(bc0,br0),hyc(br0)));
 m.cx=hxc(m.ex,m.ey+3);m.cy=hyc(m.ey+3);
 }
 return m;
@@ -505,7 +528,7 @@ const wpns=PL.inv.filter(i=>['stick','knife','axe','bow','staff'].includes(i.typ
 if(wpns.length<2){addMsg('Only one weapon.');return;}
 const cur=wpns.indexOf(PL.wpn);
 PL.wpn=wpns[(cur+1)%wpns.length];
-addMsg('Weapon: '+PL.wpn+' ('+({stick:9,knife:20,axe:30,bow:30,staff:50}[PL.wpn]||4)+' dmg)');
+addMsg('Weapon: '+PL.wpn+' '+wpnStars(PL.wpn));
 }
 function advZone(){
 zone++;addMsg('You push deeper... entering '+ZNAMES[zone]);loadZone(zone);
@@ -1672,14 +1695,15 @@ const rCol=W-pd;
 
 // Row 1: weapon icon + weapon text (right-aligned)
 ctx.font='bold 12px Courier New';ctx.textAlign='left';
-const _wpnTxt=(PL.wpn||'fists')+' ('+dmgVal+'dmg)';
+const _wpnTxt=(PL.wpn||'fists');
 const _wpnTxtW=ctx.measureText(_wpnTxt).width;
-const _r1TotalW=12+4+_wpnTxtW;
+const _r1TotalW=12+4+_wpnTxtW+6+(5*8+8);
 let r1x=rCol-_r1TotalW;
 ctx.save();ctx.translate(r1x,r1Y-6);ctx.scale(1.1,1.1);drawItemMini(PL.wpn||null);ctx.restore();
 r1x+=16;
 ctx.font='bold 12px Courier New';ctx.textAlign='left';
 txt(_wpnTxt,r1x,r1Y+1,'#bbffcc','rgba(0,0,0,0.95)');
+drawStrMeter(r1x+_wpnTxtW+6,r1Y-8,PL.wpn,8,9);
 
 // Row 2: status pills + weather + food count + music button (right-aligned)
 const muR=12,muCX=rCol-muR,muCY=r2Y-1;
@@ -1696,7 +1720,8 @@ ctx.textBaseline='alphabetic';
 let r2rx=muCX-muR-10;
 const wLbl={'clear':'☀️','rain':'🌧','storm':'⛈'}[weather]||'☀️';
 const wClr={'clear':'#ffee44','rain':'#99ccff','storm':'#cc99ff'}[weather]||'#ffee66';
-if(fc>0){ctx.font='bold 12px Courier New';ctx.textAlign='right';txt('🍒×'+fc,r2rx,r2Y+2,'#ccffcc','rgba(0,0,0,0.9)');r2rx-=ctx.measureText('🍒×'+fc).width+8;}
+if(fc>0){ctx.font='bold 12px Courier New';ctx.textAlign='right';txt('×'+fc,r2rx,r2Y+2,'#ccffcc','rgba(0,0,0,0.9)');r2rx-=ctx.measureText('×'+fc).width+9;
+ctx.save();ctx.translate(r2rx,r2Y-1);ctx.scale(1.1,1.1);drawItemMini(nextFood());ctx.restore();r2rx-=17;}
 ctx.font='12px Courier New';ctx.textAlign='right';txt(wLbl,r2rx,r2Y+2,wClr,'rgba(0,0,0,0.75)');r2rx-=ctx.measureText(wLbl).width+8;
 
 let pillX=r2rx;
@@ -1754,11 +1779,13 @@ const wpnBtnH=22,wpnBtnW=barW;
 WPN_BTN=null;
 ctx.save();ctx.translate(pd+10,wY-5);ctx.scale(1.25,1.25);drawItemMini(PL.wpn||null);ctx.restore();
 ctx.font='bold 13px Courier New';ctx.textAlign='left';
-txt((PL.wpn||'fists')+' ('+dmgVal+'dmg)',pd+22,wY,'#bbffcc','rgba(0,0,0,0.95)');
+txt((PL.wpn||'fists'),pd+22,wY,'#bbffcc','rgba(0,0,0,0.95)');
+drawStrMeter(pd+22+ctx.measureText(PL.wpn||'fists').width+8,wY-10,PL.wpn,9,10);
 {const wLbl={'clear':'☀️','rain':'🌧 Rain','storm':'⛈ Storm'}[weather]||'☀️';
 const wClr={'clear':'#ffee44','rain':'#99ccff','storm':'#cc99ff'}[weather]||'#ffee66';
 let lx2=pd;
-if(fc>0){ctx.font='bold 13px Courier New';txt('🍒 ×'+fc,lx2,98,'#ccffcc','rgba(0,0,0,0.9)');lx2+=52;}
+if(fc>0){ctx.save();ctx.translate(lx2+8,94);ctx.scale(1.2,1.2);drawItemMini(nextFood());ctx.restore();
+ctx.font='bold 13px Courier New';txt('×'+fc,lx2+18,98,'#ccffcc','rgba(0,0,0,0.9)');lx2+=52;}
 ctx.font='12px Courier New';txt(wLbl,lx2,98,wClr,'rgba(0,0,0,0.75)');}
 
 // ── STATUS PILLS ──
@@ -2240,17 +2267,17 @@ fgrad.addColorStop(1,hf?'rgba(0,30,0,0.45)':'rgba(10,10,10,0.3)');
 ctx.fillStyle=fgrad;ctx.beginPath();ctx.arc(fx,fy,eatR,0,Math.PI*2);ctx.fill();
 ctx.strokeStyle=hf?'rgba(80,200,120,0.75)':'rgba(40,40,40,0.4)';ctx.lineWidth=1.5;
 ctx.beginPath();ctx.arc(fx,fy,eatR,0,Math.PI*2);ctx.stroke();
-// Food icon — canvas-drawn cherry
+// Food icon: the exact food EAT will use next, plus a count badge in
+// the button's bottom-right corner.
 if(hf){
-const _es=_mobile?1.8:1.5;
-ctx.save();ctx.translate(fx,fy-2);ctx.scale(_es,_es);
-ctx.fillStyle='#553300';ctx.fillRect(-1,-6,2,6);
-ctx.fillStyle='#553300';ctx.fillRect(-6,-2,5,2);ctx.fillRect(1,-2,5,2);
-ctx.fillStyle='#28bb28';ctx.fillRect(-3,-8,6,4);ctx.fillRect(-1,-10,3,3);
-ctx.fillStyle='#cc2020';ctx.fillRect(-9,2,8,8);ctx.fillRect(1,2,8,8);
-ctx.fillStyle='#ee5555';ctx.fillRect(-8,3,4,4);ctx.fillRect(2,3,4,4);
-ctx.fillStyle='#881010';ctx.fillRect(-4,7,3,3);ctx.fillRect(5,7,3,3);
-ctx.restore();
+const _es=_mobile?2.3:1.9;
+ctx.save();ctx.translate(fx,fy);ctx.scale(_es,_es);drawItemMini(nextFood());ctx.restore();
+const n=PL.inv.filter(x=>FOODS.includes(x.type)).length;
+const bx=fx+eatR*0.72,by=fy+eatR*0.72,br=_mobile?11:9;
+ctx.fillStyle='rgba(0,0,0,0.85)';ctx.beginPath();ctx.arc(bx,by,br,0,Math.PI*2);ctx.fill();
+ctx.strokeStyle='rgba(120,230,140,0.9)';ctx.lineWidth=1.5;ctx.stroke();
+ctx.font='bold '+(_mobile?13:11)+'px Courier New';ctx.textAlign='center';ctx.textBaseline='middle';
+ctx.fillStyle='#ffffff';ctx.fillText(String(n),bx,by+1);ctx.textBaseline='alphabetic';
 }
 if(!_mobile){ctx.font='bold 11px Courier New';ctx.fillStyle=hf?'rgba(160,240,180,0.82)':'rgba(60,60,60,0.45)';
 ctx.textAlign='center';ctx.fillText('[E]',fx,fy+eatR+13);}
@@ -2602,6 +2629,25 @@ ctx.fillStyle=bl?'#ccffcc':'#77bb77';ctx.font='bold '+Math.min(18,W/18)+'px Cour
 ctx.fillText(HTP<2?'▶  NEXT PAGE':'▶  CREATE YOUR CHARACTER',W/2,H-22);
 }
 
+const FOODS=['cherry','mushroom','meat','herb'];
+// The food eatFood() will pick next (first food in the pack), or null.
+function nextFood(){const f=PL.inv.find(x=>FOODS.includes(x.type));return f?f.type:null;}
+const WPN_DMG={stick:9,knife:20,axe:30,bow:30,staff:50};
+// Weapon strength as 1-5 pips (staff = 5, fists/stick = 1).
+function wpnPips(w){return Math.max(1,Math.min(5,Math.ceil((WPN_DMG[w]||4)/10)));}
+function wpnStars(w){const n=wpnPips(w);return '★'.repeat(n)+'☆'.repeat(5-n);}
+const PIP_CLR=['#66dd66','#aadd44','#ffcc33','#ff8833','#ff4444'];
+// Draw a 5-pip strength meter with its top-left at x,y; returns its width.
+function drawStrMeter(x,y,w,pw,ph){
+const n=wpnPips(w);
+for(let i=0;i<5;i++){
+const px=x+i*(pw+2);
+ctx.fillStyle='rgba(0,0,0,0.85)';ctx.fillRect(px-1,y-1,pw+2,ph+2);
+ctx.fillStyle=i<n?PIP_CLR[i]:'rgba(60,60,60,0.7)';ctx.fillRect(px,y,pw,ph);
+if(i<n){ctx.fillStyle='rgba(255,255,255,0.3)';ctx.fillRect(px,y,pw,Math.max(1,ph/3|0));}
+}
+return 5*pw+8;
+}
 function drawItemMini(type){
 switch(type){
 case 'cherry':

@@ -283,7 +283,7 @@ m.tiles[m.ey][m.ex]=EX;
 const fp=['cherry','cherry','mushroom','mushroom','meat','herb','herb','bandage'];
 // Sticks/knives common; axe available from zone 0; bow from zone 1
 const wp=['stick','stick','knife','knife',
-  'axe','axe',...(z>0?['axe','bow']:[])];// staffs are placed separately on level 3
+  ...(z>0?['axe','axe','axe','bow']:[])];// axe from level 2; staffs are placed separately on level 3
 const up=['potion',...(z>0?['boots']:[])];
 const pool=[...fp,...wp,...up];
 for(let i=0;i<14+z*5;i++){
@@ -441,7 +441,7 @@ function doAtk(){
 PL.at={stick:0.7,knife:0.55,axe:0.72,bow:0.8,staff:1.0}[PL.wpn]||0.85;
 PL.atk=true;PL.atkT=Date.now();PL.atkDur={stick:340,knife:220,axe:380,bow:300,staff:320}[PL.wpn]||300;
 setTimeout(()=>PL.atk=false,PL.atkDur);
-const dmg={null:4,stick:9,knife:20,axe:30,bow:30,staff:50}[PL.wpn]||4;
+const dmg={null:4,stick:9,knife:20,axe:40,bow:30,staff:50}[PL.wpn]||4;
 const rng=PL.wpn==='staff'?110:PL.wpn==='bow'?200:68;
 // Snap attack direction to nearest enemy within range
 let nearest=null,nearD=rng;
@@ -507,14 +507,14 @@ function getItem(p){
 p.got=true;
 if(p.type==='boots'){PL.boots=true;addMsg('Swift Boots! Speed+');return;}
 if(p.type==='potion'){PL.hp=Math.min(PL.mhp,PL.hp+50);addMsg('Health Potion! +50 HP');return;}
-if(['cherry','mushroom','meat','herb'].includes(p.type)){PL.inv.push({type:p.type});addMsg('Picked up '+p.type+(_mobile?'. Tap the green food button to eat.':'. Press E to eat.'));return;}
+if(['cherry','mushroom','meat','herb'].includes(p.type)){PL.inv.push({type:p.type});addMsg('Picked up '+p.type+(_mobile?'. Tap the food button to eat.':'. Press E to eat.'));return;}
 if(p.type==='bandage'){PL.hp=Math.min(PL.mhp,PL.hp+40);addMsg('Bandage used! +40 HP');return;}
 if(['stick','knife','axe','bow','staff'].includes(p.type)){
 // Keep old weapons in inventory so the player can cycle between them
 if(!PL.inv.find(i=>i.type===p.type))PL.inv.push({type:p.type});
 PL.wpn=p.type;
 if(p.type==='staff')addMsg('Magic Staff: BLASTS all nearby enemies at once!');
-else if(p.type==='axe')addMsg('Iron Axe! 30 dmg — can chop trees!');
+else if(p.type==='axe')addMsg('Iron Axe! '+wpnStars('axe')+' — can chop trees!');
 else addMsg('Equipped '+p.type+'!');
 }
 }
@@ -1641,7 +1641,6 @@ ctx.fillStyle=hgrad;ctx.fillRect(0,0,W,hudH);
 ctx.fillStyle='rgba(40,160,40,0.5)';ctx.fillRect(0,hudH,W,2);
 ctx.fillStyle='rgba(60,200,60,0.08)';ctx.fillRect(0,0,W,2);
 
-const dmgVal={stick:9,knife:20,axe:30,bow:30,staff:50}[PL.wpn]||4;
 const fc=PL.inv.filter(x=>['cherry','mushroom','meat','herb'].includes(x.type)).length;
 const zClr=['#44dd44','#44aaff','#dd55ff'][zone];
 const zName=ZNAMES[zone];
@@ -2336,7 +2335,7 @@ ctx.fillStyle='#66dd66';ctx.font='bold 18px Courier New';ctx.textAlign='center';
 const rows=_mobile?
 [{icon:'🕹',label:'MOVE',keys:'Drag the joystick (left side)'},
 {icon:'🗡️',label:'ATTACK',keys:'Tap the big red button (bottom right)'},
-{icon:'🍒',label:'EAT FOOD',keys:'Tap the green food button'},
+{icon:'🍒',label:'EAT FOOD',keys:'Tap the food button'},
 {icon:'🔄',label:'SWAP WEAPON',keys:'Tap the arrows button'}]:
 [{icon:'🕹',label:'MOVE',keys:'WASD / Arrow Keys'},
 {icon:'🗡️',label:'ATTACK',keys:'Space or Z key'},
@@ -2456,7 +2455,7 @@ const groups=[
    items:[['bandage','Bandage','+40 HP instantly','#eeddaa'],['potion','Health Potion','+50 HP instantly','#ff55cc']]},
   {label:'WEAPONS',clr:'#aaccff',bg:'rgba(0,15,50,0.80)',border:'rgba(80,130,200,0.50)',
    items:[['stick','Stick','9 dmg melee','#bb9933'],['knife','Knife','20 dmg melee','#ccccee'],
-          ['axe','Iron Axe','30 dmg melee','#9a9aaa'],['bow','Bow','30 dmg ranged','#997744'],['staff','Magic Staff','50 dmg area blast','#bb55ff']]},
+          ['axe','Iron Axe','40 dmg melee','#9a9aaa'],['bow','Bow','30 dmg ranged','#997744'],['staff','Magic Staff','50 dmg area blast','#bb55ff']]},
   {label:'GEAR',clr:'#ddbb55',bg:'rgba(40,30,0,0.80)',border:'rgba(160,120,30,0.50)',
    items:[['boots','Swift Boots','Perm. speed boost','#ffcc44']]}
 ];
@@ -2640,7 +2639,7 @@ ctx.fillText(HTP<2?'▶  NEXT PAGE':'▶  CREATE YOUR CHARACTER',W/2,H-22);
 const FOODS=['cherry','mushroom','meat','herb'];
 // The food eatFood() will pick next (first food in the pack), or null.
 function nextFood(){const f=PL.inv.find(x=>FOODS.includes(x.type));return f?f.type:null;}
-const WPN_DMG={stick:9,knife:20,axe:30,bow:30,staff:50};
+const WPN_DMG={stick:9,knife:20,axe:40,bow:30,staff:50};
 // Weapon strength as 1-5 pips (staff = 5, fists/stick = 1).
 function wpnPips(w){return Math.max(1,Math.min(5,Math.ceil((WPN_DMG[w]||4)/10)));}
 function wpnStars(w){const n=wpnPips(w);return '★'.repeat(n)+'☆'.repeat(5-n);}
@@ -2926,7 +2925,7 @@ txt('▶  BEGIN ADVENTURE',W/2,btnY+26,`rgba(160,${Math.floor(255*pulse)},160,${
 
 // Controls hint
 ctx.fillStyle='#557755';ctx.font='11px Courier New';ctx.textAlign='center';
-ctx.fillText(_mobile?'Joystick to move · red button attacks · green button eats':'WASD to move · Space to attack · E to eat · Q to swap',W/2,H-16);
+ctx.fillText(_mobile?'Joystick to move · red button attacks · food button eats':'WASD to move · Space to attack · E to eat · Q to swap',W/2,H-16);
 
 // ── LIVE CHARACTER PREVIEW ──
 // Temporarily apply CC selections for the preview render
@@ -3255,7 +3254,7 @@ if(cl.wpn){PL.wpn=cl.wpn;PL.inv.push({type:cl.wpn});}
 for(const f of(cl.food||[]))PL.inv.push({type:f});
 zone=0;MSGS.length=0;loadZone(0);
 addMsg('Welcome, '+PL.name+'! Find her deep in the woods.');
-addMsg(_mobile?'Drag the joystick to move. Red button attacks, green button eats, arrows swap weapons.':'Move: WASD  Attack: Space  Eat: E  Swap: Q');
+addMsg(_mobile?'Drag the joystick to move. Red button attacks, food button eats, arrows swap weapons.':'Move: WASD  Attack: Space  Eat: E  Swap: Q');
 GS='playing';
 startMusic('game');
 }

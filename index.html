@@ -46,9 +46,27 @@ function resize(){
   C.style.transformOrigin='top left';
   C.style.transform='scale('+_cScale+')';
 }
-// Convert screen (client) coords → canvas logical coords
-function toCX(cx,cy){return{x:(cx-_cOffX)/_cScale,y:(cy-_cOffY)/_cScale};}
-resize();window.addEventListener('resize',resize);
+// Convert screen (client) coords → canvas logical coords.
+// Measure the canvas where it actually is on screen: iOS can leave the page
+// scrolled after the on-screen keyboard closes (or after rotation), and the
+// stored offsets would then send every tap to the wrong spot.
+function toCX(cx,cy){
+const r=C.getBoundingClientRect();
+if(!r.width||!r.height)return{x:(cx-_cOffX)/_cScale,y:(cy-_cOffY)/_cScale};
+return{x:(cx-r.left)*W/r.width,y:(cy-r.top)*H/r.height};
+}
+resize();window.addEventListener('resize',()=>{resize();window.scrollTo(0,0);});
+// itch.io creates the game iframe before it has its final size, and iOS
+// does not always send a resize when the frame (or itch's fullscreen view)
+// settles. Re-measure on the other signals too, plus a cheap size poll,
+// so the canvas and its buttons always match the frame we are really in.
+{let _lw=window.innerWidth,_lh=window.innerHeight;
+const _refit=()=>{if(window.innerWidth===_lw&&window.innerHeight===_lh)return;_lw=window.innerWidth;_lh=window.innerHeight;resize();};
+if(window.visualViewport)window.visualViewport.addEventListener('resize',_refit);
+window.addEventListener('orientationchange',()=>setTimeout(_refit,250));
+window.addEventListener('pageshow',_refit);
+window.addEventListener('focus',_refit);
+setInterval(_refit,500);}
 
 const TS=40,MW=44,MH=44;
 // ── Hex grid (pointy-top, odd-row right-offset) ──
@@ -263,16 +281,24 @@ for(const[nc,nr]of hexNbr(pc,pr)){if(nr>0&&nr<MH-1&&nc>0&&nc<MW-1&&m.tiles[nr][n
 
 m.tiles[m.ey][m.ex]=EX;
 const fp=['cherry','cherry','mushroom','mushroom','meat','herb','herb','bandage'];
-// Sticks/knives common; axe available from zone 0; bow/staff increasingly rare
+// Sticks/knives common; axe available from zone 0; bow from zone 1
 const wp=['stick','stick','knife','knife',
-  'axe','axe',...(z>0?['axe','bow']:[]),
-  ...(z>1?['staff','staff']:[])];// axe guaranteed on every level
+  ...(z>0?['axe','axe','axe','bow']:[])];// axe from level 2; staffs are placed separately on level 3
 const up=['potion',...(z>0?['boots']:[])];
 const pool=[...fp,...wp,...up];
 for(let i=0;i<14+z*5;i++){
 for(let t=0;t<60;t++){
 const c=rnd(MW-2)+1,r=rnd(MH-2)+1;
 if(m.tiles[r][c]===bg&&Math.hypot(c-m.sx,r-m.sy)>6){m.items.push({x:hxc(c,r),y:hyc(r),type:pool[rnd(pool.length)],got:false});break;}
+}
+}
+// Level 3 always has 1-2 Magic Staffs on the ground, on top of the random pool.
+if(z===2){
+for(let n=1+rnd(2),i=0;i<n;i++){
+for(let t=0;t<200;t++){
+const c=rnd(MW-2)+1,r=rnd(MH-2)+1;
+if(m.tiles[r][c]===bg&&Math.hypot(c-m.sx,r-m.sy)>6){m.items.push({x:hxc(c,r),y:hyc(r),type:'staff',got:false});break;}
+}
 }
 }
 const EC=[{w:5,b:2,g:0,s:0},{w:3,b:3,g:5,s:2},{w:2,b:2,g:4,s:6}][z];
@@ -297,12 +323,24 @@ break;
 }
 }
 if(z===2){
-// Clear trees around boss so it can move freely
-for(let dr=-4;dr<=4;dr++)for(let dc=-4;dc<=4;dc++){
-const br=m.ey+5+dr,bc=m.ex-2+dc;
-if(br>=1&&br<MH-1&&bc>=1&&bc<MW-1&&m.tiles[br][bc]!==WA)m.tiles[br][bc]=bg;
+// Boss spawn: the nearest spot to the usual lair with no water within 3
+// tiles, so it never lands on (or gets boxed in by) a pond or stream.
+const dryAround=(c0,r0,rad)=>{for(let dr=-rad;dr<=rad;dr++)for(let dc=-rad;dc<=rad;dc++){
+const r=r0+dr,c=c0+dc;if(r<1||r>=MH-1||c<1||c>=MW-1||m.tiles[r][c]===WA)return false;}return true;};
+let bc0=m.ex-2,br0=m.ey+5,best=-1;
+for(let r=4;r<MH-4;r++)for(let c=4;c<MW-4;c++){
+if(!dryAround(c,r,3))continue;
+const d=Math.hypot(c-(m.ex-2),r-(m.ey+5));
+if(best<0||d<best){best=d;bc0=c;br0=r;}
 }
-m.enemies.push(mkE('boss',hxc(m.ex-2,m.ey+5),hyc(m.ey+5)));
+// Clear trees and rocks around it so it can move freely; if no dry spot
+// existed at all, drain the water near it as well.
+for(let dr=-4;dr<=4;dr++)for(let dc=-4;dc<=4;dc++){
+const br=br0+dr,bc=bc0+dc;
+if(br<1||br>=MH-1||bc<1||bc>=MW-1||m.tiles[br][bc]===EX)continue;
+if(m.tiles[br][bc]!==WA||(best<0&&Math.abs(dr)<=2&&Math.abs(dc)<=2))m.tiles[br][bc]=bg;
+}
+m.enemies.push(mkE('boss',hxc(bc0,br0),hyc(br0)));
 m.cx=hxc(m.ex,m.ey+3);m.cy=hyc(m.ey+3);
 }
 return m;
@@ -403,7 +441,7 @@ function doAtk(){
 PL.at={stick:0.7,knife:0.55,axe:0.72,bow:0.8,staff:1.0}[PL.wpn]||0.85;
 PL.atk=true;PL.atkT=Date.now();PL.atkDur={stick:340,knife:220,axe:380,bow:300,staff:320}[PL.wpn]||300;
 setTimeout(()=>PL.atk=false,PL.atkDur);
-const dmg={null:4,stick:9,knife:20,axe:30,bow:30,staff:50}[PL.wpn]||4;
+const dmg={null:4,stick:9,knife:20,axe:40,bow:30,staff:50}[PL.wpn]||4;
 const rng=PL.wpn==='staff'?110:PL.wpn==='bow'?200:68;
 // Snap attack direction to nearest enemy within range
 let nearest=null,nearD=rng;
@@ -469,14 +507,14 @@ function getItem(p){
 p.got=true;
 if(p.type==='boots'){PL.boots=true;addMsg('Swift Boots! Speed+');return;}
 if(p.type==='potion'){PL.hp=Math.min(PL.mhp,PL.hp+50);addMsg('Health Potion! +50 HP');return;}
-if(['cherry','mushroom','meat','herb'].includes(p.type)){PL.inv.push({type:p.type});addMsg('Picked up '+p.type+'. Press E to eat.');return;}
+if(['cherry','mushroom','meat','herb'].includes(p.type)){PL.inv.push({type:p.type});addMsg('Picked up '+p.type+(_mobile?'. Tap the food button to eat.':'. Press E to eat.'));return;}
 if(p.type==='bandage'){PL.hp=Math.min(PL.mhp,PL.hp+40);addMsg('Bandage used! +40 HP');return;}
 if(['stick','knife','axe','bow','staff'].includes(p.type)){
 // Keep old weapons in inventory so the player can cycle between them
 if(!PL.inv.find(i=>i.type===p.type))PL.inv.push({type:p.type});
 PL.wpn=p.type;
 if(p.type==='staff')addMsg('Magic Staff: BLASTS all nearby enemies at once!');
-else if(p.type==='axe')addMsg('Iron Axe! 30 dmg — can chop trees!');
+else if(p.type==='axe')addMsg('Iron Axe! '+wpnStars('axe')+' — can chop trees!');
 else addMsg('Equipped '+p.type+'!');
 }
 }
@@ -498,7 +536,7 @@ const wpns=PL.inv.filter(i=>['stick','knife','axe','bow','staff'].includes(i.typ
 if(wpns.length<2){addMsg('Only one weapon.');return;}
 const cur=wpns.indexOf(PL.wpn);
 PL.wpn=wpns[(cur+1)%wpns.length];
-addMsg('Weapon: '+PL.wpn+' ('+({stick:9,knife:20,axe:30,bow:30,staff:50}[PL.wpn]||4)+' dmg)');
+addMsg('Weapon: '+PL.wpn+' '+wpnStars(PL.wpn));
 }
 function advZone(){
 zone++;addMsg('You push deeper... entering '+ZNAMES[zone]);loadZone(zone);
@@ -1603,7 +1641,6 @@ ctx.fillStyle=hgrad;ctx.fillRect(0,0,W,hudH);
 ctx.fillStyle='rgba(40,160,40,0.5)';ctx.fillRect(0,hudH,W,2);
 ctx.fillStyle='rgba(60,200,60,0.08)';ctx.fillRect(0,0,W,2);
 
-const dmgVal={stick:9,knife:20,axe:30,bow:30,staff:50}[PL.wpn]||4;
 const fc=PL.inv.filter(x=>['cherry','mushroom','meat','herb'].includes(x.type)).length;
 const zClr=['#44dd44','#44aaff','#dd55ff'][zone];
 const zName=ZNAMES[zone];
@@ -1665,14 +1702,15 @@ const rCol=W-pd;
 
 // Row 1: weapon icon + weapon text (right-aligned)
 ctx.font='bold 12px Courier New';ctx.textAlign='left';
-const _wpnTxt=(PL.wpn||'fists')+' ('+dmgVal+'dmg)';
+const _wpnTxt=(PL.wpn||'fists');
 const _wpnTxtW=ctx.measureText(_wpnTxt).width;
-const _r1TotalW=12+4+_wpnTxtW;
+const _r1TotalW=12+4+_wpnTxtW+6+(5*8+8);
 let r1x=rCol-_r1TotalW;
 ctx.save();ctx.translate(r1x,r1Y-6);ctx.scale(1.1,1.1);drawItemMini(PL.wpn||null);ctx.restore();
 r1x+=16;
 ctx.font='bold 12px Courier New';ctx.textAlign='left';
 txt(_wpnTxt,r1x,r1Y+1,'#bbffcc','rgba(0,0,0,0.95)');
+drawStrMeter(r1x+_wpnTxtW+6,r1Y-8,PL.wpn,8,9);
 
 // Row 2: status pills + weather + food count + music button (right-aligned)
 const muR=12,muCX=rCol-muR,muCY=r2Y-1;
@@ -1689,7 +1727,8 @@ ctx.textBaseline='alphabetic';
 let r2rx=muCX-muR-10;
 const wLbl={'clear':'☀️','rain':'🌧','storm':'⛈'}[weather]||'☀️';
 const wClr={'clear':'#ffee44','rain':'#99ccff','storm':'#cc99ff'}[weather]||'#ffee66';
-if(fc>0){ctx.font='bold 12px Courier New';ctx.textAlign='right';txt('🍒×'+fc,r2rx,r2Y+2,'#ccffcc','rgba(0,0,0,0.9)');r2rx-=ctx.measureText('🍒×'+fc).width+8;}
+if(fc>0){ctx.font='bold 12px Courier New';ctx.textAlign='right';txt('×'+fc,r2rx,r2Y+2,'#ccffcc','rgba(0,0,0,0.9)');r2rx-=ctx.measureText('×'+fc).width+9;
+ctx.save();ctx.translate(r2rx,r2Y-1);ctx.scale(1.1,1.1);drawItemMini(nextFood());ctx.restore();r2rx-=17;}
 ctx.font='12px Courier New';ctx.textAlign='right';txt(wLbl,r2rx,r2Y+2,wClr,'rgba(0,0,0,0.75)');r2rx-=ctx.measureText(wLbl).width+8;
 
 let pillX=r2rx;
@@ -1747,11 +1786,13 @@ const wpnBtnH=22,wpnBtnW=barW;
 WPN_BTN=null;
 ctx.save();ctx.translate(pd+10,wY-5);ctx.scale(1.25,1.25);drawItemMini(PL.wpn||null);ctx.restore();
 ctx.font='bold 13px Courier New';ctx.textAlign='left';
-txt((PL.wpn||'fists')+' ('+dmgVal+'dmg)',pd+22,wY,'#bbffcc','rgba(0,0,0,0.95)');
+txt((PL.wpn||'fists'),pd+22,wY,'#bbffcc','rgba(0,0,0,0.95)');
+drawStrMeter(pd+22+ctx.measureText(PL.wpn||'fists').width+8,wY-10,PL.wpn,9,10);
 {const wLbl={'clear':'☀️','rain':'🌧 Rain','storm':'⛈ Storm'}[weather]||'☀️';
 const wClr={'clear':'#ffee44','rain':'#99ccff','storm':'#cc99ff'}[weather]||'#ffee66';
 let lx2=pd;
-if(fc>0){ctx.font='bold 13px Courier New';txt('🍒 ×'+fc,lx2,98,'#ccffcc','rgba(0,0,0,0.9)');lx2+=52;}
+if(fc>0){ctx.save();ctx.translate(lx2+8,94);ctx.scale(1.2,1.2);drawItemMini(nextFood());ctx.restore();
+ctx.font='bold 13px Courier New';txt('×'+fc,lx2+18,98,'#ccffcc','rgba(0,0,0,0.9)');lx2+=52;}
 ctx.font='12px Courier New';txt(wLbl,lx2,98,wClr,'rgba(0,0,0,0.75)');}
 
 // ── STATUS PILLS ──
@@ -2233,17 +2274,17 @@ fgrad.addColorStop(1,hf?'rgba(0,30,0,0.45)':'rgba(10,10,10,0.3)');
 ctx.fillStyle=fgrad;ctx.beginPath();ctx.arc(fx,fy,eatR,0,Math.PI*2);ctx.fill();
 ctx.strokeStyle=hf?'rgba(80,200,120,0.75)':'rgba(40,40,40,0.4)';ctx.lineWidth=1.5;
 ctx.beginPath();ctx.arc(fx,fy,eatR,0,Math.PI*2);ctx.stroke();
-// Food icon — canvas-drawn cherry
+// Food icon: the exact food EAT will use next, plus a count badge in
+// the button's bottom-right corner.
 if(hf){
-const _es=_mobile?1.8:1.5;
-ctx.save();ctx.translate(fx,fy-2);ctx.scale(_es,_es);
-ctx.fillStyle='#553300';ctx.fillRect(-1,-6,2,6);
-ctx.fillStyle='#553300';ctx.fillRect(-6,-2,5,2);ctx.fillRect(1,-2,5,2);
-ctx.fillStyle='#28bb28';ctx.fillRect(-3,-8,6,4);ctx.fillRect(-1,-10,3,3);
-ctx.fillStyle='#cc2020';ctx.fillRect(-9,2,8,8);ctx.fillRect(1,2,8,8);
-ctx.fillStyle='#ee5555';ctx.fillRect(-8,3,4,4);ctx.fillRect(2,3,4,4);
-ctx.fillStyle='#881010';ctx.fillRect(-4,7,3,3);ctx.fillRect(5,7,3,3);
-ctx.restore();
+const _es=_mobile?2.3:1.9;
+ctx.save();ctx.translate(fx,fy);ctx.scale(_es,_es);drawItemMini(nextFood());ctx.restore();
+const n=PL.inv.filter(x=>FOODS.includes(x.type)).length;
+const bx=fx+eatR*0.72,by=fy+eatR*0.72,br=_mobile?11:9;
+ctx.fillStyle='rgba(0,0,0,0.85)';ctx.beginPath();ctx.arc(bx,by,br,0,Math.PI*2);ctx.fill();
+ctx.strokeStyle='rgba(120,230,140,0.9)';ctx.lineWidth=1.5;ctx.stroke();
+ctx.font='bold '+(_mobile?13:11)+'px Courier New';ctx.textAlign='center';ctx.textBaseline='middle';
+ctx.fillStyle='#ffffff';ctx.fillText(String(n),bx,by+1);ctx.textBaseline='alphabetic';
 }
 if(!_mobile){ctx.font='bold 11px Courier New';ctx.fillStyle=hf?'rgba(160,240,180,0.82)':'rgba(60,60,60,0.45)';
 ctx.textAlign='center';ctx.fillText('[E]',fx,fy+eatR+13);}
@@ -2293,9 +2334,9 @@ if(HTP===0){
 ctx.fillStyle='#66dd66';ctx.font='bold 18px Courier New';ctx.textAlign='center';ctx.fillText('— CONTROLS —',W/2,TOP+14);
 const rows=_mobile?
 [{icon:'🕹',label:'MOVE',keys:'Drag the joystick (left side)'},
-{icon:'🗡️',label:'ATTACK',keys:'Tap the ATK button (right side)'},
-{icon:'🍒',label:'EAT FOOD',keys:'Tap the EAT button'},
-{icon:'🔄',label:'SWAP WEAPON',keys:'Tap the SWAP button'}]:
+{icon:'🗡️',label:'ATTACK',keys:'Tap the big red button (bottom right)'},
+{icon:'🍒',label:'EAT FOOD',keys:'Tap the food button'},
+{icon:'🔄',label:'SWAP WEAPON',keys:'Tap the arrows button'}]:
 [{icon:'🕹',label:'MOVE',keys:'WASD / Arrow Keys'},
 {icon:'🗡️',label:'ATTACK',keys:'Space or Z key'},
 {icon:'🍒',label:'EAT FOOD',keys:'E key'},
@@ -2414,7 +2455,7 @@ const groups=[
    items:[['bandage','Bandage','+40 HP instantly','#eeddaa'],['potion','Health Potion','+50 HP instantly','#ff55cc']]},
   {label:'WEAPONS',clr:'#aaccff',bg:'rgba(0,15,50,0.80)',border:'rgba(80,130,200,0.50)',
    items:[['stick','Stick','9 dmg melee','#bb9933'],['knife','Knife','20 dmg melee','#ccccee'],
-          ['axe','Iron Axe','30 dmg melee','#9a9aaa'],['bow','Bow','30 dmg ranged','#997744'],['staff','Magic Staff','50 dmg area blast','#bb55ff']]},
+          ['axe','Iron Axe','40 dmg melee','#9a9aaa'],['bow','Bow','30 dmg ranged','#997744'],['staff','Magic Staff','50 dmg area blast','#bb55ff']]},
   {label:'GEAR',clr:'#ddbb55',bg:'rgba(40,30,0,0.80)',border:'rgba(160,120,30,0.50)',
    items:[['boots','Swift Boots','Perm. speed boost','#ffcc44']]}
 ];
@@ -2595,6 +2636,25 @@ ctx.fillStyle=bl?'#ccffcc':'#77bb77';ctx.font='bold '+Math.min(18,W/18)+'px Cour
 ctx.fillText(HTP<2?'▶  NEXT PAGE':'▶  CREATE YOUR CHARACTER',W/2,H-22);
 }
 
+const FOODS=['cherry','mushroom','meat','herb'];
+// The food eatFood() will pick next (first food in the pack), or null.
+function nextFood(){const f=PL.inv.find(x=>FOODS.includes(x.type));return f?f.type:null;}
+const WPN_DMG={stick:9,knife:20,axe:40,bow:30,staff:50};
+// Weapon strength as 1-5 pips (staff = 5, fists/stick = 1).
+function wpnPips(w){return Math.max(1,Math.min(5,Math.ceil((WPN_DMG[w]||4)/10)));}
+function wpnStars(w){const n=wpnPips(w);return '★'.repeat(n)+'☆'.repeat(5-n);}
+const PIP_CLR=['#66dd66','#aadd44','#ffcc33','#ff8833','#ff4444'];
+// Draw a 5-pip strength meter with its top-left at x,y; returns its width.
+function drawStrMeter(x,y,w,pw,ph){
+const n=wpnPips(w);
+for(let i=0;i<5;i++){
+const px=x+i*(pw+2);
+ctx.fillStyle='rgba(0,0,0,0.85)';ctx.fillRect(px-1,y-1,pw+2,ph+2);
+ctx.fillStyle=i<n?PIP_CLR[i]:'rgba(60,60,60,0.7)';ctx.fillRect(px,y,pw,ph);
+if(i<n){ctx.fillStyle='rgba(255,255,255,0.3)';ctx.fillRect(px,y,pw,Math.max(1,ph/3|0));}
+}
+return 5*pw+8;
+}
 function drawItemMini(type){
 switch(type){
 case 'cherry':
@@ -2865,7 +2925,7 @@ txt('▶  BEGIN ADVENTURE',W/2,btnY+26,`rgba(160,${Math.floor(255*pulse)},160,${
 
 // Controls hint
 ctx.fillStyle='#557755';ctx.font='11px Courier New';ctx.textAlign='center';
-ctx.fillText(_mobile?'Joystick to move · ATK to attack · EAT for food':'WASD to move · Space to attack · E to eat · Q to swap',W/2,H-16);
+ctx.fillText(_mobile?'Joystick to move · red button attacks · food button eats':'WASD to move · Space to attack · E to eat · Q to swap',W/2,H-16);
 
 // ── LIVE CHARACTER PREVIEW ──
 // Temporarily apply CC selections for the preview render
@@ -3033,7 +3093,8 @@ if(PL.hp>0&&PL.hp<40){
     ctx.fillText('⚠  LOW HEALTH',W/2,H/2-60);
   }
 }
-drawMinimap();drawHUD();drawCtrl();
+// Each overlay draws on its own, so one failing can't hide the buttons.
+for(const f of[drawMinimap,drawHUD,drawCtrl]){try{f();}catch(e){_noteErr(e);}}
 }
 
 // ============================================================
@@ -3049,7 +3110,7 @@ if(GS==='win'){if(e.key===' '||e.key==='Enter')newGame();return;}
 if(GS==='transition')return;
 if(GS==='create'){
 if(CCEDIT){
-if(e.key==='Enter'){if(CCN.trim())PL.name=CCN.trim();CCEDIT=false;ni.style.display='none';startGame();return;}
+if(e.key==='Enter'){if(CCN.trim())PL.name=CCN.trim();closeNameInput();startGame();return;}
 if(e.key==='Backspace')CCN=CCN.slice(0,-1);
 else if(e.key.length===1&&CCN.length<12)CCN+=e.key;
 e.preventDefault();
@@ -3080,8 +3141,26 @@ window.addEventListener('touchend',ev=>{
 // stuck in suspended; touchend (fired ~50ms later, still within gesture scope) closes
 // the stale context and creates a fresh one that iOS is willing to resume.
 _initAudio();
-for(const t of ev.changedTouches)if(t.identifier===JOY.id){JOY.on=false;JOY.id=-1;TD.x=0;TD.y=0;}
+for(const t of ev.changedTouches)if(t.identifier===JOY.id)releaseJoy();
 });
+// iOS sends touchcancel instead of touchend for system gestures, rotation,
+// notifications and itch's fullscreen toggle. Without this the joystick stays
+// latched on the old finger and the player keeps drifting.
+window.addEventListener('touchcancel',ev=>{
+for(const t of ev.changedTouches)if(t.identifier===JOY.id)releaseJoy();
+});
+function releaseJoy(){JOY.on=false;JOY.id=-1;TD.x=0;TD.y=0;}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)releaseJoy();});
+window.addEventListener('blur',releaseJoy);
+// Close the hidden name field properly: tapping the canvas never blurs it
+// (touchstart calls preventDefault), so the iOS keyboard could stay up over
+// the joystick and attack buttons, and the page could stay scrolled.
+function closeNameInput(){
+CCEDIT=false;
+if(document.activeElement===ni)ni.blur();
+ni.style.display='none';
+window.scrollTo(0,0);
+}
 function onTD(id,tx,ty){
 if(GS==='title'){GS='howto';HTP=0;return;}
 if(GS==='howto'){HTP<2?HTP++:(GS='create');return;}
@@ -3155,12 +3234,12 @@ const nw2=cw-20,nfY=_nY;
 if(tx>=lx+10&&tx<=lx+10+nw2&&ty>=nfY&&ty<=nfY+34){
 CCEDIT=true;ni.style.display='block';ni.value=CCN;ni.focus();
 ni.oninput=()=>{CCN=ni.value.slice(0,18);};
-ni.onblur=()=>{if(CCN.trim())PL.name=CCN.trim();CCEDIT=false;ni.style.display='none';};
+ni.onblur=()=>{if(CCN.trim())PL.name=CCN.trim();CCEDIT=false;ni.style.display='none';window.scrollTo(0,0);};
 return;
 }
 // Begin button
 const btnY=_bY,btnW2=Math.min(cw-20,220),btnX=W/2-btnW2/2;
-if(tx>=btnX&&tx<=btnX+btnW2&&ty>=btnY&&ty<=btnY+40){if(CCN.trim())PL.name=CCN.trim();ni.style.display='none';CCEDIT=false;startGame();}
+if(tx>=btnX&&tx<=btnX+btnW2&&ty>=btnY&&ty<=btnY+40){if(CCN.trim())PL.name=CCN.trim();closeNameInput();startGame();}
 }
 
 // ============================================================
@@ -3175,7 +3254,7 @@ if(cl.wpn){PL.wpn=cl.wpn;PL.inv.push({type:cl.wpn});}
 for(const f of(cl.food||[]))PL.inv.push({type:f});
 zone=0;MSGS.length=0;loadZone(0);
 addMsg('Welcome, '+PL.name+'! Find her deep in the woods.');
-addMsg(_mobile?'Move: joystick  Attack: ATK  Eat: EAT  Swap: SWAP':'Move: WASD  Attack: Space  Eat: E  Swap: Q');
+addMsg(_mobile?'Drag the joystick to move. Red button attacks, food button eats, arrows swap weapons.':'Move: WASD  Attack: Space  Eat: E  Swap: Q');
 GS='playing';
 startMusic('game');
 }
@@ -3204,7 +3283,25 @@ const _origGetItem=getItem;getItem=function(p){_origGetItem(p);playSound('pickup
 // MAIN LOOP
 // ============================================================
 let lastT=0;
+// Runtime errors: keep the game going, but show the latest one in small
+// text at the bottom of the screen so a phone screenshot can report it.
+let _lastErr=null;
+function _noteErr(e){_lastErr={msg:String(e&&e.message||e),at:String(e&&e.stack||'').split('\n')[1]||'',t:Date.now()};}
+window.addEventListener('error',ev=>_noteErr(ev.error||ev.message));
+window.addEventListener('unhandledrejection',ev=>_noteErr(ev.reason));
+function _drawErr(){
+if(!_lastErr||Date.now()-_lastErr.t>20000)return;
+ctx.save();ctx.font='10px Courier New';ctx.textAlign='left';ctx.fillStyle='rgba(0,0,0,0.7)';ctx.fillRect(0,H-26,W,26);
+ctx.fillStyle='#ff8888';ctx.fillText(('ERR '+GS+': '+_lastErr.msg).slice(0,120),4,H-15);
+ctx.fillText(_lastErr.at.trim().slice(0,120),4,H-4);ctx.restore();
+}
 function loop(ts){
+// Schedule the next frame first, so one runtime error can't freeze the game.
+requestAnimationFrame(loop);
+try{_frame(ts);}catch(e){_noteErr(e);}
+_drawErr();
+}
+function _frame(ts){
 const dt=Math.min((ts-lastT)/1000,0.05);lastT=ts;
 ctx.clearRect(0,0,W,H);
 if(GS==='title')drawTitle();
@@ -3221,7 +3318,6 @@ if(PL.hp>0&&PL.hp<40){_hbT-=dt;if(_hbT<=0){const iv=0.30+(PL.hp/40)*0.80;_hbT=iv
 drawGame();}
 else if(GS==='win'){if(MAP){updPt(dt);drawGame();}drawWin();}
 else if(GS==='dead'){if(MAP)drawGame();drawDead();}
-requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
 </script>

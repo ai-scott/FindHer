@@ -281,16 +281,24 @@ for(const[nc,nr]of hexNbr(pc,pr)){if(nr>0&&nr<MH-1&&nc>0&&nc<MW-1&&m.tiles[nr][n
 
 m.tiles[m.ey][m.ex]=EX;
 const fp=['cherry','cherry','mushroom','mushroom','meat','herb','herb','bandage'];
-// Sticks/knives common; axe available from zone 0; bow/staff increasingly rare
+// Sticks/knives common; axe available from zone 0; bow from zone 1
 const wp=['stick','stick','knife','knife',
-  'axe','axe',...(z>0?['axe','bow']:[]),
-  ...(z>1?['staff','staff']:[])];// axe guaranteed on every level
+  'axe','axe',...(z>0?['axe','bow']:[])];// staffs are placed separately on level 3
 const up=['potion',...(z>0?['boots']:[])];
 const pool=[...fp,...wp,...up];
 for(let i=0;i<14+z*5;i++){
 for(let t=0;t<60;t++){
 const c=rnd(MW-2)+1,r=rnd(MH-2)+1;
 if(m.tiles[r][c]===bg&&Math.hypot(c-m.sx,r-m.sy)>6){m.items.push({x:hxc(c,r),y:hyc(r),type:pool[rnd(pool.length)],got:false});break;}
+}
+}
+// Level 3 always has 1-2 Magic Staffs on the ground, on top of the random pool.
+if(z===2){
+for(let n=1+rnd(2),i=0;i<n;i++){
+for(let t=0;t<200;t++){
+const c=rnd(MW-2)+1,r=rnd(MH-2)+1;
+if(m.tiles[r][c]===bg&&Math.hypot(c-m.sx,r-m.sy)>6){m.items.push({x:hxc(c,r),y:hyc(r),type:'staff',got:false});break;}
+}
 }
 }
 const EC=[{w:5,b:2,g:0,s:0},{w:3,b:3,g:5,s:2},{w:2,b:2,g:4,s:6}][z];
@@ -499,7 +507,7 @@ function getItem(p){
 p.got=true;
 if(p.type==='boots'){PL.boots=true;addMsg('Swift Boots! Speed+');return;}
 if(p.type==='potion'){PL.hp=Math.min(PL.mhp,PL.hp+50);addMsg('Health Potion! +50 HP');return;}
-if(['cherry','mushroom','meat','herb'].includes(p.type)){PL.inv.push({type:p.type});addMsg('Picked up '+p.type+'. Press E to eat.');return;}
+if(['cherry','mushroom','meat','herb'].includes(p.type)){PL.inv.push({type:p.type});addMsg('Picked up '+p.type+(_mobile?'. Tap the green food button to eat.':'. Press E to eat.'));return;}
 if(p.type==='bandage'){PL.hp=Math.min(PL.mhp,PL.hp+40);addMsg('Bandage used! +40 HP');return;}
 if(['stick','knife','axe','bow','staff'].includes(p.type)){
 // Keep old weapons in inventory so the player can cycle between them
@@ -2327,9 +2335,9 @@ if(HTP===0){
 ctx.fillStyle='#66dd66';ctx.font='bold 18px Courier New';ctx.textAlign='center';ctx.fillText('— CONTROLS —',W/2,TOP+14);
 const rows=_mobile?
 [{icon:'🕹',label:'MOVE',keys:'Drag the joystick (left side)'},
-{icon:'🗡️',label:'ATTACK',keys:'Tap the ATK button (right side)'},
-{icon:'🍒',label:'EAT FOOD',keys:'Tap the EAT button'},
-{icon:'🔄',label:'SWAP WEAPON',keys:'Tap the SWAP button'}]:
+{icon:'🗡️',label:'ATTACK',keys:'Tap the big red button (bottom right)'},
+{icon:'🍒',label:'EAT FOOD',keys:'Tap the green food button'},
+{icon:'🔄',label:'SWAP WEAPON',keys:'Tap the arrows button'}]:
 [{icon:'🕹',label:'MOVE',keys:'WASD / Arrow Keys'},
 {icon:'🗡️',label:'ATTACK',keys:'Space or Z key'},
 {icon:'🍒',label:'EAT FOOD',keys:'E key'},
@@ -2918,7 +2926,7 @@ txt('▶  BEGIN ADVENTURE',W/2,btnY+26,`rgba(160,${Math.floor(255*pulse)},160,${
 
 // Controls hint
 ctx.fillStyle='#557755';ctx.font='11px Courier New';ctx.textAlign='center';
-ctx.fillText(_mobile?'Joystick to move · ATK to attack · EAT for food':'WASD to move · Space to attack · E to eat · Q to swap',W/2,H-16);
+ctx.fillText(_mobile?'Joystick to move · red button attacks · green button eats':'WASD to move · Space to attack · E to eat · Q to swap',W/2,H-16);
 
 // ── LIVE CHARACTER PREVIEW ──
 // Temporarily apply CC selections for the preview render
@@ -3086,7 +3094,8 @@ if(PL.hp>0&&PL.hp<40){
     ctx.fillText('⚠  LOW HEALTH',W/2,H/2-60);
   }
 }
-drawMinimap();drawHUD();drawCtrl();
+// Each overlay draws on its own, so one failing can't hide the buttons.
+for(const f of[drawMinimap,drawHUD,drawCtrl]){try{f();}catch(e){_noteErr(e);}}
 }
 
 // ============================================================
@@ -3246,7 +3255,7 @@ if(cl.wpn){PL.wpn=cl.wpn;PL.inv.push({type:cl.wpn});}
 for(const f of(cl.food||[]))PL.inv.push({type:f});
 zone=0;MSGS.length=0;loadZone(0);
 addMsg('Welcome, '+PL.name+'! Find her deep in the woods.');
-addMsg(_mobile?'Move: joystick  Attack: ATK  Eat: EAT  Swap: SWAP':'Move: WASD  Attack: Space  Eat: E  Swap: Q');
+addMsg(_mobile?'Drag the joystick to move. Red button attacks, green button eats, arrows swap weapons.':'Move: WASD  Attack: Space  Eat: E  Swap: Q');
 GS='playing';
 startMusic('game');
 }
@@ -3275,9 +3284,25 @@ const _origGetItem=getItem;getItem=function(p){_origGetItem(p);playSound('pickup
 // MAIN LOOP
 // ============================================================
 let lastT=0;
+// Runtime errors: keep the game going, but show the latest one in small
+// text at the bottom of the screen so a phone screenshot can report it.
+let _lastErr=null;
+function _noteErr(e){_lastErr={msg:String(e&&e.message||e),at:String(e&&e.stack||'').split('\n')[1]||'',t:Date.now()};}
+window.addEventListener('error',ev=>_noteErr(ev.error||ev.message));
+window.addEventListener('unhandledrejection',ev=>_noteErr(ev.reason));
+function _drawErr(){
+if(!_lastErr||Date.now()-_lastErr.t>20000)return;
+ctx.save();ctx.font='10px Courier New';ctx.textAlign='left';ctx.fillStyle='rgba(0,0,0,0.7)';ctx.fillRect(0,H-26,W,26);
+ctx.fillStyle='#ff8888';ctx.fillText(('ERR '+GS+': '+_lastErr.msg).slice(0,120),4,H-15);
+ctx.fillText(_lastErr.at.trim().slice(0,120),4,H-4);ctx.restore();
+}
 function loop(ts){
 // Schedule the next frame first, so one runtime error can't freeze the game.
 requestAnimationFrame(loop);
+try{_frame(ts);}catch(e){_noteErr(e);}
+_drawErr();
+}
+function _frame(ts){
 const dt=Math.min((ts-lastT)/1000,0.05);lastT=ts;
 ctx.clearRect(0,0,W,H);
 if(GS==='title')drawTitle();
